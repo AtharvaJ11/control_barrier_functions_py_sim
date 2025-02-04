@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle 
 import time
-
+import json
 
 '''
 Double Integrator Dynamics with Matplotlib Visualization
@@ -16,8 +16,10 @@ class MultiRobotSimulator:
         self.dt = dt
         self.velocity_limit = velocity_limit
         self.neighbourhood_distance = self.safety_distance + (np.power(4*self.control_limit/self.gamma, 1/3)+ 2*self.velocity_limit)**2/(4*self.control_limit)
+        self.optimizer = optimizer
 
-
+        self.position_threshold = 0.1  # Position error threshold
+        self.velocity_threshold = 0.1  # Velocity error threshold
         self.positions = np.random.rand(num_agents, 2) * 10  # Random initial positions
         self.velocities = np.zeros((num_agents, 2))  # Initial velocities
         self.goal_positions = np.zeros((num_agents, 2))  # Initialize goal positions
@@ -25,17 +27,28 @@ class MultiRobotSimulator:
         self.kp = 0.6  # Proportional gain
         self.kd = 2 * np.sqrt(self.kp)  # Derivative gain
         self.trajectories = [[] for _ in range(num_agents)]  # Store agent trajectories
+        
+        json_file =f"configs/swarm_{self.num_agents}.json"
         if random:
             self.generate_points()
+        else:
+            self.load_positions_from_json(json_file)
 
-        print(self.positions)
 
+
+    def load_positions_from_json(self, json_file):
+        """ Load initial and goal positions from a JSON file """
+        with open(json_file, 'r') as f:
+            data = json.load(f)
+        
+        self.positions = np.array(data["positions"])
+        self.goal_positions = np.array(data["goal_positions"])
 
     def generate_points(self,):
         # Generate starting positions at least 2.5x safety_distance apart
         for i in range(self.num_agents):
             while True:
-                candidate_position = np.random.rand(2) * 10
+                candidate_position = np.random.rand(2) * 10 - 10.0
                 if all(np.linalg.norm(candidate_position - self.positions[j]) >= 2.0 * self.safety_distance
                     for j in range(i)):
                     self.positions[i] = candidate_position
@@ -44,7 +57,7 @@ class MultiRobotSimulator:
         # Generate goal positions at least 2.5x safety_distance away from starting positions and each other
         for i in range(self.num_agents):
             while True:
-                candidate_goal = np.random.rand(2) * 10
+                candidate_goal = np.random.rand(2) * 10 -10.0
                 if (np.linalg.norm(candidate_goal - self.positions[i]) >= 1.5 * self.safety_distance and
                     all(np.linalg.norm(candidate_goal - self.goal_positions[j]) >= 3. * self.safety_distance
                         for j in range(i))):
@@ -85,6 +98,10 @@ class MultiRobotSimulator:
                     return True
         return False
 
+
+    '''
+    simulate function
+    '''
     def simulate(self, steps):
         """Run the simulation for a given number of steps."""
         fig, ax = plt.subplots(figsize=(8, 8))
@@ -93,8 +110,12 @@ class MultiRobotSimulator:
         for step in range(steps):
             # Get nominal controls from PID controller
             nominal_controls = self.pid_controller()
-            # Get optimized controls using centralized control barrier QP
-            controls = self.centralized_control_barrier_qp(nominal_controls)
+            
+            if self.optimizer is None:
+                controls = nominal_controls
+            else:
+                # Get optimized controls using centralized control barrier QP
+                controls = self.optimizer.centralized_control_barrier_qp(nominal_controls, self.positions, self.velocities)
 
             # Check for collisions before updating dynamics
             if self.check_collision():
@@ -104,13 +125,18 @@ class MultiRobotSimulator:
             # Run dynamics with the optimized controls
             self.dynamics(controls)
 
-            # # Run dynamics with the nominal controls
-            # self.dynamics(nominal_controls)
-            
+            # Check if all agents reached their goals
+            position_error = np.linalg.norm(self.positions - self.goal_positions, axis=1)
+            velocity_error = np.linalg.norm(self.velocities - self.goal_velocities, axis=1)
+
+            if np.all(position_error < self.position_threshold) and np.all(velocity_error < self.velocity_threshold):
+                print("All agents reached their goal positions and velocities. Simulation stopped.")
+                break
+
             # Visualization of agent positions and dynamics
             ax.clear()
-            ax.set_xlim(-2, 12)
-            ax.set_ylim(-2, 12)
+            ax.set_xlim(-6, 6)
+            ax.set_ylim(-6, 6)
             ax.set_title(f"Step {step}")
             ax.set_xlabel("X Position")
             ax.set_ylabel("Y Position")
@@ -136,7 +162,7 @@ class MultiRobotSimulator:
             plt.draw()
             plt.pause(0.1)  # Pause for visualization
 
-        plt.show()  # Show the figure and wait until it is  closed
+        plt.show()  # Show the figure and wait until it is closed
 
         # Plot final trajectories
         self.plot_trajectories(colors)
@@ -150,8 +176,8 @@ class MultiRobotSimulator:
         plt.title("Trajectories of All Agents")
         plt.xlabel("X Position")
         plt.ylabel("Y Position")
-        plt.xlim(-2, 12)
-        plt.ylim(-2, 12)
+        plt.xlim(-6, 6)
+        plt.ylim(-6, 6)
 
         for i, color in enumerate(colors):
             trajectory = np.array(self.trajectories[i])
