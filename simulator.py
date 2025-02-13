@@ -28,6 +28,8 @@ class MultiRobotSimulator:
         self.kd = 2 * np.sqrt(self.kp)  # Derivative gain
         self.trajectories = [[] for _ in range(num_agents)]  # Store agent trajectories
         
+        self.step_time_list = []
+        
         json_file =f"configs/swarm_{self.num_agents}.json"
         if random:
             self.generate_points()
@@ -111,11 +113,19 @@ class MultiRobotSimulator:
             # Get nominal controls from PID controller
             nominal_controls = self.pid_controller()
             
+            
+            start_time = time.time()
+            
             if self.optimizer is None:
                 controls = nominal_controls
             else:
                 # Get optimized controls using centralized control barrier QP
                 controls = self.optimizer.centralized_control_barrier_qp(nominal_controls, self.positions, self.velocities)
+            
+            end_time = time.time()
+            step_time = end_time - start_time
+            self.step_time_list.append(step_time)
+            print(f"Step {step} took {step_time:.4f} seconds")
 
             # Check for collisions before updating dynamics
             if self.check_collision():
@@ -166,9 +176,18 @@ class MultiRobotSimulator:
 
         # Plot final trajectories
         self.plot_trajectories(colors)
+        self.plot_step_time()
 
 
-
+    def plot_step_time(self):
+        """Plot the time taken for each simulation step."""
+        plt.figure(figsize=(8, 6))
+        plt.plot(self.step_time_list, 'o-', color='b')
+        plt.title("Time Taken for Each Simulation Step")
+        plt.xlabel("Step Number")
+        plt.ylabel("Time (s)")
+        plt.show()
+        plt.close('all')
 
     def plot_trajectories(self, colors):
         """Plot the trajectories of all agents."""
@@ -186,7 +205,7 @@ class MultiRobotSimulator:
 
         plt.legend(loc="upper right")
         plt.show()
-        plt.close('all')  # Close all figures after plotting
+        # plt.close('all')  # Close all figures after plotting
 
 
 

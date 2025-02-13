@@ -32,70 +32,51 @@ class SoftminCentralizedControlBarrierFunction:
         return h_ij
     
     def compute_softmin_h(self):
-        # Compute self.h and self.S 
-        self.h =0.0
-        self.S =0.0
+        # Initialize coefficients
+        self.h = 0.0
+        self.S = 0.0
+        self.A_uxi = np.zeros(self.num_agents)
+        self.A_uyi = np.zeros(self.num_agents)
+        self.A_vxi = np.zeros(self.num_agents)
+        self.A_vyi = np.zeros(self.num_agents)
+
         for i in range(self.num_agents):
-            for j in range(i+1, self.num_agents):
-                delta_pij = self.positions[i] - self.positions[j]
-                delta_vij = self.velocities[i] - self.velocities[j]
-                h_ij = self.compute_hij(delta_pij, delta_vij)
-                self.S += np.exp(-h_ij/self.tau)
-        
-        self.h = -self.tau*np.log(self.S)
+            for j in range(self.num_agents):
+                if i != j:
+                    delta_pij = self.positions[i] - self.positions[j]
+                    delta_vij = self.velocities[i] - self.velocities[j]
+                    h_ij = self.compute_hij(delta_pij, delta_vij)
+                    exp_term = np.exp(-h_ij / self.tau)
+                    delta_pij_norm = np.linalg.norm(delta_pij, ord=2)
+
+                    # Update S
+                    self.S += exp_term
+
+                    # Update coefficients
+                    self.A_uxi[i] += exp_term * delta_pij[0] / delta_pij_norm
+                    self.A_uyi[i] += exp_term * delta_pij[1] / delta_pij_norm
+
+                    delhij_delxi = (2 * self.control_limit * delta_pij[0]) / (delta_pij_norm * np.sqrt(4 * self.control_limit * (delta_pij_norm - self.safety_distance)))
+                    delhij_delxi += delta_vij[0] / delta_pij_norm - (delta_pij[0] * (delta_pij.T @ delta_vij)) / (delta_pij_norm ** 3)
+                    self.A_vxi[i] += exp_term * delhij_delxi
+
+                    delhij_delyi = (2 * self.control_limit * delta_pij[1]) / (delta_pij_norm * np.sqrt(4 * self.control_limit * (delta_pij_norm - self.safety_distance)))
+                    delhij_delyi += delta_vij[1] / delta_pij_norm - (delta_pij[1] * (delta_pij.T @ delta_vij)) / (delta_pij_norm ** 3)
+                    self.A_vyi[i] += exp_term * delhij_delyi
+
+        self.h = -self.tau * np.log(self.S)
 
     def coeff_uxi(self, i):
-        self.A_uxi =0.0
-        for j in range(self.num_agents):
-            if i!=j:
-                delta_pij = self.positions[i] - self.positions[j]
-                delta_vij = self.velocities[i] - self.velocities[j]
-                h_ij = self.compute_hij(delta_pij, delta_vij)
-                self.A_uxi += np.exp(-h_ij/self.tau)*delta_pij[0]/np.linalg.norm(delta_pij, ord=2)
-
-        return -self.A_uxi
+        return -self.A_uxi[i]
 
     def coeff_uyi(self, i):
-        self.A_uyi =0.0
-        for j in range(self.num_agents):
-            if i!=j:
-                delta_pij = self.positions[i] - self.positions[j]
-                delta_vij = self.velocities[i] - self.velocities[j]
-                h_ij = self.compute_hij(delta_pij, delta_vij)
-                self.A_uyi += np.exp(-h_ij/self.tau)*delta_pij[1]/np.linalg.norm(delta_pij, ord=2)
-
-        return -self.A_uyi
-
+        return -self.A_uyi[i]
 
     def coeff_vxi(self, i):
-        self.A_vxi =0.0
-        for j in range(self.num_agents):
-            if i!=j:
-                delta_pij = self.positions[i] - self.positions[j]
-                delta_vij = self.velocities[i] - self.velocities[j]
-                h_ij = self.compute_hij(delta_pij, delta_vij)
-                delta_pij_norm = np.linalg.norm(delta_pij, ord=2)
-                delhij_delxi = (2*self.control_limit*delta_pij[0])/(delta_pij_norm*np.sqrt(4*self.control_limit*(delta_pij_norm-self.safety_distance)))
-                delhij_delxi += delta_vij[0]/delta_pij_norm - (delta_pij[0]*(delta_pij.T @ delta_vij))/(delta_pij_norm**3)
-
-                self.A_vxi += np.exp(-h_ij/self.tau) * delhij_delxi
-
-        return self.A_vxi
-
+        return self.A_vxi[i]
 
     def coeff_vyi(self, i):
-        self.A_vyi =0.0
-        for j in range(self.num_agents):
-            if i!=j:
-                delta_pij = self.positions[i] - self.positions[j]
-                delta_vij = self.velocities[i] - self.velocities[j]
-                h_ij = self.compute_hij(delta_pij, delta_vij)
-                delta_pij_norm = np.linalg.norm(delta_pij, ord=2)
-                delhij_delyi = (2*self.control_limit*delta_pij[1])/(delta_pij_norm*np.sqrt(4*self.control_limit*(delta_pij_norm-self.safety_distance)))
-                delhij_delyi += delta_vij[1]/delta_pij_norm - (delta_pij[1]*(delta_pij.T @ delta_vij))/(delta_pij_norm**3)
-                self.A_vyi += np.exp(-h_ij/self.tau) * delhij_delyi
-
-        return self.A_vyi
+        return self.A_vyi[i]
 
     def compute_Ai_bi(self, i):
         
