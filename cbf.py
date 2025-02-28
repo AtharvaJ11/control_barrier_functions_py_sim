@@ -7,15 +7,16 @@ import time
 
 class CentralizedControlBarrierFunction:
     def __init__(self, num_agents, control_limit, velocity_limit, safety_distance, dt):
-        print("Running CentralizedControlBarrierFunction")
+
         self.num_agents = num_agents
         self.control_limit = control_limit
         self.safety_distance = safety_distance
-        self.gamma =1.0  # Barrier function parameter
+        self.gamma =1.0 # Barrier function parameter
         self.dt = dt
         self.velocity_limit = velocity_limit
         self.neighbourhood_distance = self.safety_distance + (np.power(4*self.control_limit/self.gamma, 1/3)+ 2*self.velocity_limit)**2/(4*self.control_limit)
-
+        self.eps=0
+            
         self.positions = np.zeros((num_agents, 2))
         self.velocities = np.zeros((num_agents, 2))
 
@@ -68,8 +69,7 @@ class CentralizedControlBarrierFunction:
                                         + np.linalg.norm(delta_vij, ord=2)**2
                                         )
 
-        print(f"A_ij: {A_ij} for i: {i} and j: {j}")
-        print(f"b_ij: {b_ij}")
+
         return A_ij, b_ij
 
     def centralized_control_barrier_qp(self, nominal_controls, positions, velocities):
@@ -85,15 +85,26 @@ class CentralizedControlBarrierFunction:
         # Number of agents and control input dimensions
         N, u_dim = nominal_controls.shape
 
+        
+        # Create a copy of nominal controls
+        left_turn_control = np.copy(nominal_controls)
+        # Rotating left or CCW
+        left_turn_control[:, 0] = nominal_controls[:, 1]
+        left_turn_control[:, 1] = -1 * nominal_controls[:, 0]
+        
         # Flatten nominal controls for easier indexing in the optimization
         nominal_controls_flat = nominal_controls.ravel()
         
+        left_turn_control_flat = left_turn_control.ravel()
+        
+        
         self.positions =positions
         self.velocities = velocities
+        
 
         # Objective function: minimize the squared error between nominal and actual controls
         def objective(u):
-            return np.sum((u - nominal_controls_flat) ** 2)
+            return np.sum((u - nominal_controls_flat) ** 2) 
 
         # Constraints: Control limits and safety distance constraints
         constraints = []
@@ -119,15 +130,22 @@ class CentralizedControlBarrierFunction:
             fun=objective,
             x0=initial_guess,
             constraints=constraints,
-            method='SLSQP'
+            method='SLSQP',
+            options={'ftol': 1e-6*self.num_agents*self.num_agents}
         )
 
         if result.success:
             # Reshape the optimized controls to match the input dimensions
             optimal_controls = result.x.reshape((N, u_dim))
-            return optimal_controls
+            return optimal_controls, True
         else:
-            print("No feasible solution found.")
-            return nominal_controls
+            print(f"Norm of velocities {np.linalg.norm(velocities)}")
+            print(f"Message: {result.message}")
+            print(f"Final Cost Function Value: {result.fun}")
+            print(f"Gradient Norm (KKT Residual): {np.linalg.norm(result.jac)}")
+            print(f"Status Code: {result.status}")
+            print(f"Result: {result.x}")
+            return result.x.reshape((N, u_dim)), False
+
 
 

@@ -2,6 +2,13 @@
 
  The repo is for validating Control barrier function algorithms on Double integrator kinematics robots.
 
+### Media
+
+Here are some images from the `media` folder to help you visualize the simulation:
+
+#### Simulation Example
+
+<img src="media/Figure_1.png" alt="Simulation Example" width="400"/>
 
 ### Scripts & Functionalities
 
@@ -17,17 +24,17 @@
 To run the simulation using `main.py`, use the following command:
 
 ```bash
-python main.py --optimizer <optimizer_type> --num_agents <number_of_agents> --random <random_seed>
+python main.py --optimizer <optimizer_type> --num_agents <number_of_agents> --spawn <spawn_type>
 ```
 
 - `<optimizer_type>`: Type of optimizer to use. Options are `centralized` or `softmin`.
 - `<number_of_agents>`: Number of agents in the simulation.
-- `<random_seed>`: Use random seed. Options are `True` or `False`.
+- `<spawn_type>`: Type of spawn configuration. Options are `circle`, `random`, or `custom`.
 
 #### Example
 
-To run the simulation with a centralized optimizer, 5 agents, and a random seed:
+To run the simulation with a centralized optimizer, 5 agents, and a random spawn configuration:
 
 ```bash
-python main.py --optimizer centralized --num_agents 5 --random True
+python main.py --optimizer centralized --num_agents 5 --spawn random
 ```

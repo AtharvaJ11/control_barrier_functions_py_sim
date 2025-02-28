@@ -2,12 +2,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle 
 from scipy.optimize import minimize
-import cvxpy as cp
 import time
 
 class SoftminCentralizedControlBarrierFunction:
     def __init__(self, num_agents, control_limit, velocity_limit, safety_distance, dt):
-        print("Running Softmin CentralizedControlBarrierFunction")
         self.num_agents = num_agents
         self.control_limit = control_limit
         self.safety_distance = safety_distance
@@ -15,11 +13,15 @@ class SoftminCentralizedControlBarrierFunction:
         self.dt = dt
         self.velocity_limit = velocity_limit
         self.neighbourhood_distance = self.safety_distance + (np.power(4*self.control_limit/self.gamma, 1/3)+ 2*self.velocity_limit)**2/(4*self.control_limit)
-        self.tau = .10  # Softmin parameter
+        
+        self.tau = .10 * np.log(self.num_agents)  # Softmin parameter
+        # self.tau = 0.3/(self.num_agents)
         self.positions = np.zeros((num_agents, 2))
         self.velocities = np.zeros((num_agents, 2))
-
-
+        self.eps = 0
+        
+        # Initialize h_ij matrix
+        self.h_ij_matrix = np.zeros((self.num_agents, self.num_agents))
 
     '''
     Centralized Legacy Control Barrier functions
@@ -32,64 +34,65 @@ class SoftminCentralizedControlBarrierFunction:
         return h_ij
     
     def compute_softmin_h(self):
-        # Initialize coefficients
+        
+        # Compute self.h and self.S 
         self.h = 0.0
         self.S = 0.0
-        self.A_uxi = np.zeros(self.num_agents)
-        self.A_uyi = np.zeros(self.num_agents)
-        self.A_vxi = np.zeros(self.num_agents)
-        self.A_vyi = np.zeros(self.num_agents)
-
         for i in range(self.num_agents):
-            for j in range(self.num_agents):
-                if i != j:
-                    delta_pij = self.positions[i] - self.positions[j]
-                    delta_vij = self.velocities[i] - self.velocities[j]
-                    h_ij = self.compute_hij(delta_pij, delta_vij)
-                    exp_term = np.exp(-h_ij / self.tau)
-                    delta_pij_norm = np.linalg.norm(delta_pij, ord=2)
-
-                    # Update S
-                    self.S += exp_term
-
-                    # Update coefficients
-                    self.A_uxi[i] += exp_term * delta_pij[0] / delta_pij_norm
-                    self.A_uyi[i] += exp_term * delta_pij[1] / delta_pij_norm
-
-                    delhij_delxi = (2 * self.control_limit * delta_pij[0]) / (delta_pij_norm * np.sqrt(4 * self.control_limit * (delta_pij_norm - self.safety_distance)))
-                    delhij_delxi += delta_vij[0] / delta_pij_norm - (delta_pij[0] * (delta_pij.T @ delta_vij)) / (delta_pij_norm ** 3)
-                    self.A_vxi[i] += exp_term * delhij_delxi
-
-                    delhij_delyi = (2 * self.control_limit * delta_pij[1]) / (delta_pij_norm * np.sqrt(4 * self.control_limit * (delta_pij_norm - self.safety_distance)))
-                    delhij_delyi += delta_vij[1] / delta_pij_norm - (delta_pij[1] * (delta_pij.T @ delta_vij)) / (delta_pij_norm ** 3)
-                    self.A_vyi[i] += exp_term * delhij_delyi
-
+            for j in range(i + 1, self.num_agents):
+                delta_pij = self.positions[i] - self.positions[j]
+                delta_vij = self.velocities[i] - self.velocities[j]
+                h_ij = self.compute_hij(delta_pij, delta_vij)
+                self.h_ij_matrix[i, j] = h_ij
+                self.h_ij_matrix[j, i] = h_ij  # Since h_ij is symmetric
+                self.S += np.exp(-h_ij / self.tau)
+        
         self.h = -self.tau * np.log(self.S)
 
-    def coeff_uxi(self, i):
-        return -self.A_uxi[i]
+    def get_coeff(self, i):
+        A_uxi = 0.0
+        A_uyi = 0.0
+        A_vxi = 0.0
+        A_vyi = 0.0
 
-    def coeff_uyi(self, i):
-        return -self.A_uyi[i]
+        for j in range(self.num_agents):
+            if i != j:
+                delta_pij = self.positions[i] - self.positions[j]
+                delta_vij = self.velocities[i] - self.velocities[j]
+                h_ij = self.h_ij_matrix[i, j]  # Get h_ij value from the matrix
+                delta_pij_norm = np.linalg.norm(delta_pij, ord=2)
+                
+                exp_term = np.exp(-h_ij / self.tau)
+                
+                A_uxi += exp_term * delta_pij[0] / delta_pij_norm
+                A_uyi += exp_term * delta_pij[1] / delta_pij_norm
+                
+                delhij_delxi = (2 * self.control_limit * delta_pij[0]) / (delta_pij_norm * np.sqrt(4 * self.control_limit * (delta_pij_norm - self.safety_distance)))
+                delhij_delxi += delta_vij[0] / delta_pij_norm - (delta_pij[0] * (delta_pij.T @ delta_vij)) / (delta_pij_norm ** 3)
+                
+                delhij_delyi = (2 * self.control_limit * delta_pij[1]) / (delta_pij_norm * np.sqrt(4 * self.control_limit * (delta_pij_norm - self.safety_distance)))
+                delhij_delyi += delta_vij[1] / delta_pij_norm - (delta_pij[1] * (delta_pij.T @ delta_vij)) / (delta_pij_norm ** 3)
+                
+                A_vxi += exp_term * delhij_delxi
+                A_vyi += exp_term * delhij_delyi
 
-    def coeff_vxi(self, i):
-        return self.A_vxi[i]
+        return -A_uxi, -A_uyi, A_vxi, A_vyi
 
-    def coeff_vyi(self, i):
-        return self.A_vyi[i]
 
     def compute_Ai_bi(self, i):
         
         A_i = np.zeros((1, 2*self.num_agents))  # Assuming 2D control inputs for each agent
         b_i=0.0
 
-        Axi =self.coeff_uxi(i)
-        Ayi = self.coeff_uyi(i)
+        Axi, Ayi, Avxi, Avyi = self.get_coeff(i)
+        
+
         A_i[0, 2*i] = Axi
         A_i[0, 2*i+1] = Ayi
         # print(f"Axi: {Axi}, Ayi: {Ayi}")
 
-        b_i = self.S*self.gamma*(self.h**3) + self.coeff_vxi(i)*self.velocities[i, 0] + self.coeff_vyi(i)*self.velocities[i, 1]
+        b_i = self.S*self.gamma*(self.h**3) + Avxi*self.velocities[i, 0] + Avyi*self.velocities[i, 1]
+        
         return A_i, b_i
 
     def centralized_control_barrier_qp(self, nominal_controls, positions, velocities):
@@ -105,18 +108,27 @@ class SoftminCentralizedControlBarrierFunction:
         # Number of agents and control input dimensions
         N, u_dim = nominal_controls.shape
 
+        
+        # Create a copy of nominal controls
+        left_turn_control = np.copy(nominal_controls)
+        # Rotating left or CCW
+        left_turn_control[:, 0] = nominal_controls[:, 1]
+        left_turn_control[:, 1] = -1 * nominal_controls[:, 0]
+        
         # Flatten nominal controls for easier indexing in the optimization
         nominal_controls_flat = nominal_controls.ravel()
         
+        left_turn_control_flat = left_turn_control.ravel()
         
         
         self.positions =positions
         self.velocities = velocities
+        
 
 
         # Objective function: minimize the squared error between nominal and actual controls
         def objective(u):
-            return np.sum((u - nominal_controls_flat) ** 2)
+            return np.sum((u - nominal_controls_flat) ** 2) 
 
         # Constraints: Control limits and safety distance constraints
         constraints = []
@@ -137,7 +149,6 @@ class SoftminCentralizedControlBarrierFunction:
             A[i] = A_i
             b[i] = b_i    
 
-        print(f"A: {A}, b: {b}, nominal controls: {nominal_controls_flat}")
         # Define the constraint as a lambda function
         constraints.append({'type': 'ineq', 'fun': lambda u, A=A, b=b: b - np.dot(A, u)})
 
@@ -149,15 +160,22 @@ class SoftminCentralizedControlBarrierFunction:
             fun=objective,
             x0=initial_guess,
             constraints=constraints,
-            method='SLSQP'
+            method='SLSQP',
+            options={'ftol': 1e-6*self.num_agents*self.num_agents}
         )
+
 
         if result.success:
             # Reshape the optimized controls to match the input dimensions
-            optimal_controls = result.x.reshape((N, u_dim)) 
-            return optimal_controls
+            optimal_controls = result.x.reshape((N, u_dim))
+            return optimal_controls, True
         else:
-            print("No feasible solution found.")
-            return nominal_controls
+            print(f"Norm of velocities {np.linalg.norm(velocities)}")
+            print(f"Message: {result.message}")
+            print(f"Final Cost Function Value: {result.fun}")
+            print(f"Gradient Norm (KKT Residual): {np.linalg.norm(result.jac)}")
+            print(f"Status Code: {result.status}")
+            print(f"Result: {result.x}")
+            return result.x.reshape((N, u_dim)), False
 
 

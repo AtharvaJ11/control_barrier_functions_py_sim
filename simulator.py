@@ -8,7 +8,7 @@ import json
 Double Integrator Dynamics with Matplotlib Visualization
 '''
 class MultiRobotSimulator:
-    def __init__(self, num_agents, optimizer, control_limit, velocity_limit, safety_distance, dt, random=False):
+    def __init__(self, num_agents, optimizer, control_limit, velocity_limit, safety_distance, dt, spawn):
         self.num_agents = num_agents
         self.control_limit = control_limit
         self.safety_distance = safety_distance
@@ -29,12 +29,16 @@ class MultiRobotSimulator:
         self.trajectories = [[] for _ in range(num_agents)]  # Store agent trajectories
         
         self.step_time_list = []
+        self.grid_size = 4*self.safety_distance*self.num_agents/np.pi
         
-        json_file =f"configs/swarm_{self.num_agents}.json"
-        if random:
-            self.generate_points()
-        else:
+        
+        json_file =f"{spawn}/swarm_{self.num_agents}.json"
+        if spawn == "circle":
+            self.generate_points_circle()
+        elif spawn == "custom":
             self.load_positions_from_json(json_file)
+        else:
+            self.generate_points() # Random spawn
 
 
 
@@ -50,7 +54,7 @@ class MultiRobotSimulator:
         # Generate starting positions at least 2.5x safety_distance apart
         for i in range(self.num_agents):
             while True:
-                candidate_position = np.random.rand(2) * 10 - 10.0
+                candidate_position = np.random.rand(2) * self.grid_size - self.grid_size/2
                 if all(np.linalg.norm(candidate_position - self.positions[j]) >= 2.0 * self.safety_distance
                     for j in range(i)):
                     self.positions[i] = candidate_position
@@ -59,12 +63,28 @@ class MultiRobotSimulator:
         # Generate goal positions at least 2.5x safety_distance away from starting positions and each other
         for i in range(self.num_agents):
             while True:
-                candidate_goal = np.random.rand(2) * 10 -10.0
+                candidate_goal = np.random.rand(2) *self.grid_size - self.grid_size/2
                 if (np.linalg.norm(candidate_goal - self.positions[i]) >= 1.5 * self.safety_distance and
-                    all(np.linalg.norm(candidate_goal - self.goal_positions[j]) >= 3. * self.safety_distance
+                    all(np.linalg.norm(candidate_goal - self.goal_positions[j]) >= 2. * self.safety_distance
                         for j in range(i))):
                     self.goal_positions[i] = candidate_goal
                     break
+
+
+    def generate_points_circle(self,):
+        # Generate starting positions on a circle of diameter grid_size
+        angle_increment = 2 * np.pi / self.num_agents
+        radius = self.grid_size / 2
+        for i in range(self.num_agents):
+            angle = i * angle_increment
+            self.positions[i] = np.array([radius * np.cos(angle), radius * np.sin(angle)])
+
+        # Generate goal positions diametrically opposite to starting positions
+        for i in range(self.num_agents):
+            self.goal_positions[i] = -self.positions[i]
+
+
+
 
     def pid_controller(self):
         """Generate nominal control inputs using a PD controller."""
@@ -104,32 +124,40 @@ class MultiRobotSimulator:
     '''
     simulate function
     '''
-    def simulate(self, steps):
+    def simulate(self, steps, plot_on=True):
+        step = 0
+        done =False
+        success = True
         """Run the simulation for a given number of steps."""
-        fig, ax = plt.subplots(figsize=(8, 8))
-        colors = plt.cm.jet(np.linspace(0, 1, self.num_agents))
+        if plot_on:
+            fig, ax = plt.subplots(figsize=(8, 8))
+            colors = plt.cm.jet(np.linspace(0, 1, self.num_agents))
 
         for step in range(steps):
             # Get nominal controls from PID controller
             nominal_controls = self.pid_controller()
             
-            
             start_time = time.time()
             
             if self.optimizer is None:
-                controls = nominal_controls
+                controls, success = nominal_controls
             else:
                 # Get optimized controls using centralized control barrier QP
-                controls = self.optimizer.centralized_control_barrier_qp(nominal_controls, self.positions, self.velocities)
+                controls, success = self.optimizer.centralized_control_barrier_qp(nominal_controls, self.positions, self.velocities)
             
             end_time = time.time()
             step_time = end_time - start_time
             self.step_time_list.append(step_time)
-            print(f"Step {step} took {step_time:.4f} seconds")
 
+            if not success:
+                print("No feasible solution found for optimzation problem")
+                done = False
+                break
+ 
             # Check for collisions before updating dynamics
             if self.check_collision():
                 print("Simulation stopped due to safety violation.")
+                done=False
                 break
 
             # Run dynamics with the optimized controls
@@ -140,43 +168,49 @@ class MultiRobotSimulator:
             velocity_error = np.linalg.norm(self.velocities - self.goal_velocities, axis=1)
 
             if np.all(position_error < self.position_threshold) and np.all(velocity_error < self.velocity_threshold):
+                done=True
                 print("All agents reached their goal positions and velocities. Simulation stopped.")
                 break
 
-            # Visualization of agent positions and dynamics
-            ax.clear()
-            ax.set_xlim(-6, 6)
-            ax.set_ylim(-6, 6)
-            ax.set_title(f"Step {step}")
-            ax.set_xlabel("X Position")
-            ax.set_ylabel("Y Position")
+            if plot_on:
+                # Visualization of agent positions and dynamics
+                ax.clear()
+                ax.set_xlim(-self.grid_size/1.6, self.grid_size/1.6)
+                ax.set_ylim(-self.grid_size/1.6, self.grid_size/1.6)
+                ax.set_title(f"Step {step}")
+                ax.set_xlabel("X Position")
+                ax.set_ylabel("Y Position")
 
-            # Visualize each agent
-            for i, color in enumerate(colors):
-                # Draw agent as a circle representing its safety zone
-                circle = Circle(self.positions[i], 0.5*self.safety_distance, color=color, alpha=0.3)
-                ax.add_patch(circle)
+                # Visualize each agent
+                for i, color in enumerate(colors):
+                    # Draw agent as a circle representing its safety zone
+                    circle = Circle(self.positions[i], 0.5*self.safety_distance, color=color, alpha=0.3)
+                    ax.add_patch(circle)
 
-                # Draw agent position
-                ax.plot(self.positions[i, 0], self.positions[i, 1], 'o', color=color, label=f"Agent {i+1}")
+                    # Draw agent position
+                    ax.plot(self.positions[i, 0], self.positions[i, 1], 'o', color=color, label=f"Agent {i+1}")
 
-                # Draw goal positions
-                ax.plot(self.goal_positions[i, 0], self.goal_positions[i, 1], 'x', color=color, markersize=10)
+                    # Draw goal positions
+                    ax.plot(self.goal_positions[i, 0], self.goal_positions[i, 1], 'x', color=color, markersize=10)
 
-                # Draw velocity arrows
-                ax.arrow(self.positions[i, 0], self.positions[i, 1],
-                        self.velocities[i, 0] * 0.5, self.velocities[i, 1] * 0.5,
-                        color=color, head_width=0.2, head_length=0.3)
+                    # Draw velocity arrows
+                    ax.arrow(self.positions[i, 0], self.positions[i, 1],
+                            self.velocities[i, 0] * 0.5, self.velocities[i, 1] * 0.5,
+                            color=color, head_width=0.2, head_length=0.3)
 
-            ax.legend(loc="upper right")
-            plt.draw()
-            plt.pause(0.1)  # Pause for visualization
+                ax.legend(loc="upper right")
+                plt.draw()
+                plt.pause(0.1)  # Pause for visualization
 
-        plt.show()  # Show the figure and wait until it is closed
+        if plot_on:
+            plt.show()  # Show the figure and wait until it is closed
 
-        # Plot final trajectories
-        self.plot_trajectories(colors)
-        self.plot_step_time()
+            # Plot final trajectories
+            self.plot_trajectories(colors)
+            self.plot_step_time()
+        
+        # Returns final step and average time taken for each optimization step
+        return step, np.mean(self.step_time_list), done
 
 
     def plot_step_time(self):
